@@ -1,0 +1,881 @@
+;-----------------------------------------------------------------------------------
+;				LAVADORA
+;			Daniela Corrales y Lucia Sagasti
+;-----------------------------------------------------------------------------------
+DISPLAY_1	EQU	P0
+BLOQ_PUERTA	EQU 	P0.7		;Bloquear la puerta
+MOTOR_DESA	EQU	P1.0
+PUERTA_ABIERTA 	EQU 	P1.1
+LLENO 		EQU 	P1.2
+SENSOR_VACIADO	EQU	P1.3
+BOTON_INICIO	EQU	P1.4
+DISPLAY_2	EQU	P2
+SENTIDO_GIRO	EQU	P2.7
+TEMPERATURA	EQU	P3
+BOTON_ENCENDIDO	EQU	P3.2
+VALVULA 	EQU 	P3.3		;Válvula de entradas de agua
+CALENTADOR 	EQU 	P3.6
+ESTADO 		EQU	R0
+EVENTO 		EQU 	R1
+CONT1s		EQU	R2
+CONT15s		EQU	R3
+CONT1m		EQU	R4
+CONT10m		EQU	R5
+CONT50m		EQU	R6
+TEMP_SELEC	EQU	R7
+TICK_ADC	EQU	0x23.0
+TICK_TIMER0	EQU	0x23.1
+ADCON 		EQU	0xC5
+ADCH		EQU	0xC6
+PWMP		EQU	0xFE
+PWM0		EQU     0xFC
+TICK_1s		EQU	0x24.0
+TICK_15s	EQU	0x24.1
+TICK_1m		EQU	0x24.2
+TICK_10m	EQU	0x24.3
+TICK_50m	EQU	0x24.4
+MINUTOS		EQU	0x25
+VALOR		EQU	0x26
+
+ORG 0X00
+	AJMP INICIALIZACIONES
+
+ORG 0x03
+	AJMP INT0_ISR
+
+ORG 0x0B
+	AJMP TIMER0_ISR
+	
+ORG 0x53
+	AJMP ADC_ISR
+
+;ORG 0X7B
+;-----------------------------------------------------------------------------------
+;				INICIALIZACIONES
+;-----------------------------------------------------------------------------------
+INICIALIZACIONES:
+	MOV IE, #0x81
+	ORL PCON, #0x01
+	ANL IE ,#0xFE
+	MOV ESTADO, #0x00
+	MOV EVENTO, #0x00
+	CLR TICK_ADC
+	MOV PWMP, #0x7F				;PROGRAMAR PWM0 A 600 RPM
+	MOV PWM0, #0x00
+	MOV TEMP_SELEC, #0x00 
+	ACALL INICIALIZAR_T0
+	SJMP INICIALIZAR_PUERTOS
+	
+INICIALIZAR_T0:
+	CLR TICK_TIMER0
+	MOV TH0, #0x7B
+	MOV TL0, #0x80
+	CLR TICK_1s
+	CLR TICK_15s
+	CLR TICK_1m
+	CLR TICK_10m
+	CLR TICK_50m
+	MOV CONT1s, #0x00
+	MOV CONT15s, #0x00
+	MOV CONT1m, #0x00
+	MOV CONT10m, #0x00
+	MOV CONT50m, #0x00	
+	MOV TMOD, #0x01 			; Poner el Timer 0 en modo 1
+	MOV IE, #0x82 				;Activamos interrupciones generales y la interrupción del timer 0
+	RET
+
+INICIALIZAR_PUERTOS:
+	MOV P0, #0X00				;00000000 --> todo el puerto como salida ;DISPLAY
+	MOV P1, #0X1E				;00011110 --> bits 1,2,3,4 como entrada
+	MOV P2, #0X00 				;00000000 --> todo el puerto como salida ;DISPLAY
+	MOV P3, #0X07 				;00000111 --> bits 0,1,2 como entrada 
+
+
+;-----------------------------------------------------------------------------------
+;				PROGRAMA PRINCIPAL
+;-----------------------------------------------------------------------------------	
+INICIO:
+	ACALL MAQ_ESTADOS
+	AJMP INICIO
+
+;-----------------------------------------------------------------------------------
+;				MAQUINA DE ESTADOS
+;-----------------------------------------------------------------------------------
+
+MAQ_ESTADOS:
+	MOV A, ESTADO
+	RL A
+	MOV DPTR, #LISTA_EST
+	JMP @A+DPTR
+
+LISTA_EST:
+	AJMP ESTADO_0 ; Nombre Estado 0
+	AJMP ESTADO_1 ; Nombre Estado 1
+	AJMP ESTADO_2 ; Nombre Estado 2
+	AJMP ESTADO_3
+	AJMP ESTADO_4 ; Nombre Estado 0
+	AJMP ESTADO_5 ; Nombre Estado 1
+	AJMP ESTADO_6 ; Nombre Estado 2
+	AJMP ESTADO_7
+	AJMP ESTADO_8	
+	AJMP ESTADO_9
+
+ESTADO_0:	;REPOSO
+	ACALL GEN_EVENT_0
+	ACALL MQ_EVEN_0
+	RET
+
+ESTADO_1:	;SOBREPESO
+	ACALL GEN_EVENT_1 ; Comprobamos todas las condiciones y guardamos en EVENTO el número correspondiente
+	ACALL MQ_EVEN_1 ; Realizamos las acciones correspondientes a cada evento
+	RET
+
+ESTADO_2:	;TEMPERATURA
+	ACALL GEN_EVENT_2
+	ACALL MQ_EVEN_2
+	RET
+
+ESTADO_3:	;LLENADO
+	ACALL GEN_EVENT_3
+	ACALL MQ_EVEN_3
+	RET
+
+ESTADO_4:	;CALENTADO
+	ACALL GEN_EVENT_4
+	ACALL MQ_EVEN_4
+	RET
+
+ESTADO_5:	;LAVADO
+	ACALL GEN_EVENT_5
+	ACALL MQ_EVEN_5
+	RET
+
+ESTADO_6:	;VACIADO
+	ACALL GEN_EVENT_6
+	ACALL MQ_EVEN_6
+	RET
+	
+ESTADO_7:	;CENTRIFUGADO
+	ACALL GEN_EVENT_7
+	ACALL MQ_EVEN_7
+	RET
+
+ESTADO_8:	;FIN
+	ACALL GEN_EVENT_8
+	ACALL MQ_EVEN_8
+	RET
+
+
+ESTADO_9:	;PUERTA ABIERTA
+	ACALL GEN_EVENT_9
+	ACALL MQ_EVEN_9
+	RET
+;-----------------------------------------------------------------------------------
+;				ESTADO 0 - REPOSO
+;-----------------------------------------------------------------------------------
+GEN_EVENT_0:	
+	JB PUERTA_ABIERTA, G_E2_1
+	AJMP G_E1_1
+	RET
+G_E1_1:
+	MOV EVENTO, #0x01
+	RET
+G_E2_1:
+	MOV EVENTO, #0x02
+	RET
+
+MQ_EVEN_0:
+	MOV A, EVENTO
+	RL A
+	MOV DPTR, #LISTA_EVEN_E0
+	JMP @A+DPTR
+
+LISTA_EVEN_E0:
+	AJMP E0_0
+	AJMP E1_0
+	AJMP E2_0
+E0_0:
+	RET
+E1_0:
+	MOV ESTADO, #0x01
+	ANL ADCON, #0xF0 			;inicializar el ADC en el canal 0
+	ORL ADCON, #0x08
+	SETB IE.6
+	SETB IE.7
+	RET
+E2_0:
+	MOV ESTADO, #0x09
+	ORL DISPLAY_1, #01111111b 		;ponemos a 1 todos los bits para dejar el ultimo como estaba
+	ANL DISPLAY_1, #11110011b 		;ponemos una P en el puerto 0
+	ORL DISPLAY_2, #01111111b
+	ANL DISPLAY_2, #11110111b		;ponemos una A en al puerto 2
+	RET
+	
+
+
+;-----------------------------------------------------------------------------------
+;				ESTADO 1 - PESADO
+;-----------------------------------------------------------------------------------
+GEN_EVENT_1:
+	JB TICK_ADC, G_E1_SOBRE			;si hay sobrepeso Y TICK_ADC = 1
+	JB PUERTA_ABIERTA, ABIERTA
+	MOV EVENTO, #0x00
+	RET
+G_E1_SOBRE:
+	MOV A, ADCH
+	CLR C
+	SUBB A, #0xE5 				;el valor asociado al sobrepeso
+        JNC SOBREPESO
+	MOV EVENTO, #0x02
+	RET
+SOBREPESO:
+	MOV EVENTO, #0x01
+	RET
+
+MQ_EVEN_1:
+	MOV A, EVENTO
+	RL A
+	MOV DPTR, #LIST_EVEN_MQEV_1
+	JMP @A+DPTR
+
+LIST_EVEN_MQEV_1:
+	AJMP	E0_1
+	AJMP 	E1_1
+	AJMP 	E2_1
+	AJMP	E3_1
+
+E0_1:
+	RET
+E1_1:	
+	ORL DISPLAY_1, #01111111b		;ponemos a 1 todos los bits para dejar el ultimo como estaba
+	ANL DISPLAY_1, #11101101b		;ponemos una S en el puerto 0
+	ORL DISPLAY_2, #01111111b 		;ponemos a 1 todos los bits para dejar el ultimo como estaba
+	ANL DISPLAY_2, #11110011b 		;ponemos una P en el puerto 2
+	CLR TICK_ADC
+	JB PUERTA_ABIERTA, ABIERTA
+	RET
+
+ABIERTA:
+	MOV EVENTO, #0x03
+	RET
+
+E2_1:	
+	CLR TICK_ADC
+	MOV ESTADO, #0x02
+	RET
+
+E3_1:
+	ORL DISPLAY_1, #01111111b 	;ponemos a 1 todos los bits para dejar el ultimo como estaba
+	ANL DISPLAY_1, #11110011b 	;ponemos una P en el puerto 0
+	ORL DISPLAY_2, #01111111b
+	ANL DISPLAY_2, #11110111b	;ponemos una A en al puerto 2
+	MOV ESTADO, #0X09
+	RET
+
+
+;-----------------------------------------------------------------------------------
+;				ESTADO 2 - SELECCIONAR TEMPERATURA
+;-----------------------------------------------------------------------------------
+GEN_EVENT_2:
+	JB BOTON_INICIO, G_E1_2
+	MOV EVENTO, #0x00
+	RET
+
+G_E1_2:
+	MOV EVENTO, #0x01
+	RET
+
+MQ_EVEN_2:
+	MOV A, EVENTO
+	RL A
+	MOV DPTR, #LIST_EVEN_MQEV_2
+	JMP @A+DPTR
+
+LIST_EVEN_MQEV_2:
+	AJMP E0_2
+	AJMP E1_2
+E0_2:
+   	MOV A, TEMPERATURA
+   	ANL A, #00000011b        ; aislar 2 bits de selección de temperatura
+
+   	CJNE A, #0, TEMP1
+    	ORL DISPLAY_1, #01111111b
+    	ANL DISPLAY_1, #11111000b        ; 't'
+    	ORL DISPLAY_2, #01111111b
+    	ANL DISPLAY_2, #10111111b        ; '0'
+	MOV TEMP_SELEC, #0x00
+    	RET
+
+TEMP1:
+    	CJNE A, #1, TEMP2
+    	ORL DISPLAY_1, #01111111b
+    	ANL DISPLAY_1, #11111000b        ; 't'
+    	ORL DISPLAY_2, #01111111b
+    	ANL DISPLAY_2, #10000110b        ; '1'
+	MOV TEMP_SELEC, #0x01
+    	RET
+
+TEMP2:
+    	CJNE A, #2, TEMP3
+    	ORL DISPLAY_1, #01111111b
+    	ANL DISPLAY_1, #11111000b        ; 't'
+    	ORL DISPLAY_2, #01111111b
+    	ANL DISPLAY_2, #11011011b        ; '2'
+	MOV TEMP_SELEC, #0x02
+    	RET
+
+TEMP3:
+    	ORL DISPLAY_1, #01111111b
+    	ANL DISPLAY_1, #11111000b        ; 't'
+    	ORL DISPLAY_2, #01111111b
+    	ANL DISPLAY_2, #11001111b        ; '3' 
+	MOV TEMP_SELEC, #0x03
+	RET
+E1_2:
+    	SETB BLOQ_PUERTA
+    	SETB VALVULA
+    	MOV ESTADO, #0x03         
+    	RET
+
+
+;-----------------------------------------------------------------------------------
+;				ESTADO 3 - LLENADO
+;-----------------------------------------------------------------------------------
+GEN_EVENT_3:
+	JB LLENO, G_E1_3
+	MOV EVENTO, #0x00
+	RET
+
+G_E1_3:
+	MOV EVENTO, #0x01
+	RET
+
+MQ_EVEN_3:
+	MOV A, EVENTO
+	RL A
+	MOV DPTR, #LIST_EVEN_MQEV_3
+	JMP @A+DPTR
+
+LIST_EVEN_MQEV_3:
+	AJMP E0_3
+	AJMP E1_3
+
+E0_3:
+	RET
+
+E1_3: 		
+	;DESACTIVAR LLENO P1.2
+	CLR VALVULA			;Cerrar la valvula de agua P3.3=0
+	MOV A, TEMP_SELEC
+	CJNE A, #0x00, ENCENDER_CALENTADOR
+	SJMP CONTINUAR_3
+
+ENCENDER_CALENTADOR:
+	SETB CALENTADOR			;Encender el calentador P3.6 = 1
+
+CONTINUAR_3:
+	ACALL ARRANCAR_T0
+	ANL ADCON, #0xF0
+	ORL ADCON,#0x09
+	SETB IE.6
+	SETB IE.7
+	MOV ESTADO, #0x04
+	RET
+
+
+;-----------------------------------------------------------------------------------
+;				ESTADO 4 - CALENTADO
+;-----------------------------------------------------------------------------------	
+GEN_EVENT_4:
+	JB TICK_1s, COMPROBAR_TEMP
+	MOV EVENTO, #0x00
+	RET
+
+COMPROBAR_TEMP:
+	CLR TICK_1s
+	JB TICK_ADC, CHECK_0
+	MOV EVENTO, #0x00
+	RET
+
+CHECK_0:
+	MOV A, ADCH
+	CJNE TEMP_SELEC, #0x00, CHECK_40	;Si B es diferente a 0 saltamos a comprobar la temperatura siguiente 40
+	AJMP TEMP_ALCANZADA			;como es fria no hay que calentar, la temperatura es correcta
+
+CHECK_40:
+	CJNE TEMP_SELEC, #0x01, CHECK_60	;Si la temperatura no es la 1(40º) saltamos a comprobar si es la temperatura 2 (60º)
+	CLR C
+	SUBB A, #0x65
+	JNC TEMP_ALCANZADA
+	MOV EVENTO, #0x01
+	RET
+
+CHECK_60:
+	CJNE TEMP_SELEC, #0x02, CHECK_80	;Si la temperatura no es la 2(60º) saltamos a comprobar si es la temperatura 3 (80º)
+	CLR C
+	SUBB A, #0x99
+	JNC TEMP_ALCANZADA
+	MOV EVENTO, #0x01
+	RET
+
+CHECK_80:
+	
+	CLR C
+	SUBB A, #0xCC
+	JNC TEMP_ALCANZADA
+	MOV EVENTO, #0x01
+	RET
+
+
+TEMP_ALCANZADA:
+	MOV EVENTO, #0x02
+	RET
+
+MQ_EVEN_4:
+	MOV A, EVENTO
+	RL A
+	MOV DPTR, #LIST_EVEN_MQEV_4
+	JMP @A+DPTR
+
+LIST_EVEN_MQEV_4:
+	AJMP E0_4
+	AJMP E1_4
+	AJMP E2_4
+E0_4:
+	RET
+
+E1_4:
+	ACALL ARRANCAR_T0
+	CLR TICK_ADC
+	ANL ADCON, #0xF0
+	ORL ADCON,#0x09	
+	SETB IE.6
+	SETB IE.7
+	RET
+
+
+E2_4:
+	CLR TICK_ADC
+	CLR TICK_TIMER0
+	CLR TICK_1s			; Comprobar
+	CLR CALENTADOR
+	MOV MINUTOS, #0x3B
+	ACALL MOSTRAR_MINUTOS
+	ACALL ARRANCAR_T0
+	MOV PWM0, #0x1A
+	MOV ESTADO, #0x05
+	RET
+
+	
+;-----------------------------------------------------------------------------------
+;				ESTADO 5 - LAVADO
+;-----------------------------------------------------------------------------------
+GEN_EVENT_5:
+	JB TICK_50m, G_E1_5
+	JB TICK_15s, CAMBIO_GIRO
+	MOV EVENTO, #0x00
+	RET
+
+CAMBIO_GIRO:
+	CLR TICK_15s
+	MOV EVENTO, #0x02
+	JB TICK_1m, MINUTO_PASADO	
+	RET
+
+MINUTO_PASADO:
+	MOV EVENTO, #0x03
+	RET
+
+G_E1_5:
+	ACALL MOSTRAR_MINUTOS
+	CLR TICK_1m
+	CLR TICK_50m
+	CLR TICK_10m
+	CLR TICK_15s
+	CLR TICK_1s
+	MOV EVENTO, #0x01
+	RET
+
+
+MQ_EVEN_5:
+	MOV A, EVENTO
+	RL A
+	MOV DPTR, #LIST_EVEN_MQEV_5
+	JMP @A+DPTR
+
+LIST_EVEN_MQEV_5:
+	AJMP E0_5
+	AJMP E1_5
+	AJMP E2_5
+	AJMP E3_5
+	
+E0_5:
+	RET
+
+E1_5:
+	SETB MOTOR_DESA
+	MOV ESTADO, #0x06
+	MOV PWM0, #0x00 		;Paramos el PWM0 para que no siga dando vueltas mientras se vacia
+	RET
+
+E2_5:
+	;CAMIAR SENTIDO DE GIRO
+	CPL SENTIDO_GIRO 		;CPL si sentido de giro estaba a 1 cambia a 0 y viceversa
+	RET
+
+E3_5:
+	ACALL MOSTRAR_MINUTOS
+	RET
+
+;-----------------------------------------------------------------------------------
+;				ESTADO 6 - VACIADO
+;-----------------------------------------------------------------------------------
+GEN_EVENT_6:
+	JB SENSOR_VACIADO, G_E1_6
+	MOV EVENTO, #0x00
+	RET
+
+G_E1_6:
+	MOV EVENTO, #0x01
+	RET
+
+MQ_EVEN_6:
+	MOV A, EVENTO
+	RL A
+	MOV DPTR, #LIST_EVEN_MQEV_6
+	JMP @A+DPTR
+
+LIST_EVEN_MQEV_6:
+	AJMP E0_6
+	AJMP E1_6
+
+E0_6:
+	RET
+
+E1_6:
+	;DESACTIVAR SENSOR_VAVIADO P1.3
+	SETB MOTOR_DESA
+	MOV ESTADO, #0x07
+	ACALL ARRANCAR_T0
+	MOV PWM0, #0xE6		;PROGRAMAR PWM0 A 600 RPM
+	RET
+
+;-----------------------------------------------------------------------------------
+;				ESTADO 7 - CENTRIFUGADO
+;-----------------------------------------------------------------------------------
+GEN_EVENT_7:
+	JB TICK_10m, G_E1_7
+	JB TICK_1m, ENCENDER_DISPLAYS_2
+	MOV EVENTO, #0x00
+	RET
+
+ENCENDER_DISPLAYS_2:
+	AJMP MOSTRAR_MINUTOS
+	RET
+
+G_E1_7:
+	CLR TICK_10m
+	MOV EVENTO,#0x01
+	RET
+
+MQ_EVEN_7:
+	MOV A, EVENTO
+	RL A
+	MOV DPTR, #LIST_EVEN_MQEV_7
+	JMP @A+DPTR
+
+LIST_EVEN_MQEV_7:
+	AJMP E0_7
+	AJMP E1_7
+
+E0_7:
+	RET
+
+E1_7:
+	;DESACTIVAR BOTON INICIO 1.4
+	MOV PWM0, #0x00		
+	CLR BLOQ_PUERTA
+	CLR MOTOR_DESA
+	ORL DISPLAY_1, #01111111b	
+	ANL DISPLAY_1, #10111000b		;ponemos una L en el puerto 0
+	ORL DISPLAY_2, #01111111b 
+	ANL DISPLAY_2, #11110001b		;ponemos una F en el puerto 0
+	MOV ESTADO, #0x08
+	RET
+
+
+
+
+;-----------------------------------------------------------------------------------
+;				ESTADO 8 - FIN
+;-----------------------------------------------------------------------------------
+GEN_EVENT_8:
+	JB PUERTA_ABIERTA, G_E1_8
+	MOV EVENTO, #0x00
+	RET
+
+G_E1_8:
+	MOV EVENTO, #0x01
+	RET
+
+MQ_EVEN_8:
+	MOV A, EVENTO
+	RL A
+	MOV DPTR, #LIST_EVENT_MQEV_8
+	JMP @A+DPTR
+
+LIST_EVENT_MQEV_8:
+	AJMP E0_8
+	AJMP E1_8
+
+E0_8:
+	RET
+
+E1_8:
+	ORL DISPLAY_1, #01111111b 	;ponemos a 1 todos los bits para dejar el ultimo como estaba
+	ANL DISPLAY_1, #11110011b 	;ponemos una P en el puerto 0
+	ORL DISPLAY_2, #01111111b
+	ANL DISPLAY_2, #11110111b	;ponemos una A en al puerto 2
+	CLR TICK_1s
+	CLR TICK_15s
+	CLR TICK_1m
+	CLR TICK_10m
+	CLR TICK_50m
+	MOV ESTADO, #0x09
+	RET
+	
+
+
+;-----------------------------------------------------------------------------------
+;				ESTADO 9 - PUERTA ABIERTA
+;-----------------------------------------------------------------------------------
+GEN_EVENT_9:
+	JNB PUERTA_ABIERTA, G_E1_9
+	MOV EVENTO, #0x00
+	JB P3.2, IDLE
+	RET
+
+G_E1_9:
+	MOV EVENTO, #0x01
+	RET
+
+IDLE:
+	ANL DISPLAY_1, #10000000b
+	ANL DISPLAY_2, #10000000b
+	MOV IE, #0x81
+	ORL PCON, #0x01
+	ANL IE ,#0xFE
+	MOV ESTADO, #0x00
+	RET
+
+MQ_EVEN_9:
+	MOV A, EVENTO
+	RL A
+	MOV DPTR, #LIST_EVEN_MQEV_9
+	JMP @A+DPTR
+
+LIST_EVEN_MQEV_9:
+	AJMP E0_9
+	AJMP E1_9
+
+E0_9:
+	RET
+
+E1_9: 	
+	; PASAR A PUERTA CERRADA
+	ANL DISPLAY_1, #10000000b
+	ANL DISPLAY_2, #10000000b
+	ANL ADCON, #0xF0 	;inicializar el ADC en el canal 0
+	ORL ADCON, #0x08
+	SETB IE.6
+	SETB IE.7
+	MOV ESTADO, #0x01
+	RET
+
+
+	
+
+;-----------------------------------------------------------------------------------
+;				SUBRUTINAS
+;-----------------------------------------------------------------------------------
+MOSTRAR_MINUTOS:
+	CLR TICK_1m
+	MOV A, MINUTOS
+	MOV B, #0x0A
+	DIV AB ; En A se quedan las decenas y en B las unidades
+	MOV VALOR, A
+	ACALL DISPLAYS_0
+	MOV VALOR, B
+	ACALL DISPLAYS_2
+	RET
+
+DISPLAYS_0:
+	MOV A, VALOR
+	RL A
+	MOV DPTR, #LISTAD
+	JMP @A+DPTR
+
+LISTAD:
+	AJMP D0_0
+	AJMP D1_0
+	AJMP D2_0
+	AJMP D3_0
+	AJMP D4_0
+	AJMP D5_0
+	AJMP D6_0
+	AJMP D7_0
+	AJMP D8_0
+	AJMP D9_0
+D0_0:	ORL DISPLAY_1, #00111111b
+	ANL DISPLAY_1, #10111111b
+	RET
+D1_0:	ORL DISPLAY_1, #00000110b
+	ANL DISPLAY_1, #10000110b
+	RET
+D2_0:	ORL DISPLAY_1, #01011011b
+	ANL DISPLAY_1, #11011011b
+	RET
+D3_0:	ORL DISPLAY_1, #01001111b
+	ANL DISPLAY_1, #11001111b
+	RET
+D4_0:	ORL DISPLAY_1, #01100110b
+	ANL DISPLAY_1, #11100110b
+	RET
+D5_0:	ORL DISPLAY_1, #01101101b
+	ANL DISPLAY_1, #11101101b
+	RET
+D6_0:	ORL DISPLAY_1, #01111101b
+	ANL DISPLAY_1, #11111101b
+	RET
+D7_0:	ORL DISPLAY_1, #00000111b
+	ANL DISPLAY_1, #10000111b
+	RET
+D8_0:	ORL DISPLAY_1, #01111111b
+	ANL DISPLAY_1, #11111111b
+	RET
+D9_0:	ORL DISPLAY_1, #01101111b
+	ANL DISPLAY_1, #11101111b
+	RET
+
+DISPLAYS_2:
+	MOV A, VALOR
+	RL A
+	MOV DPTR, #LISTAD1
+	JMP @A+DPTR
+
+LISTAD1:
+	AJMP D0_2
+	AJMP D1_2
+	AJMP D2_2
+	AJMP D3_2
+	AJMP D4_2
+	AJMP D5_2
+	AJMP D6_2
+	AJMP D7_2
+	AJMP D8_2
+	AJMP D9_2
+D0_2:	ORL DISPLAY_2, #00111111b
+	ANL DISPLAY_2, #10111111b
+	RET
+D1_2:	ORL DISPLAY_2, #00000110b
+	ANL DISPLAY_2, #10000110b
+	RET
+D2_2:	ORL DISPLAY_2, #01011011b
+	ANL DISPLAY_2, #11011011b
+	RET
+D3_2:	ORL DISPLAY_2, #01001111b
+	ANL DISPLAY_2, #11001111b
+	RET
+D4_2:	ORL DISPLAY_2, #01100110b
+	ANL DISPLAY_2, #11100110b
+	RET
+D5_2:	ORL DISPLAY_2, #01101101b
+	ANL DISPLAY_2, #11101101b
+	RET
+D6_2:	ORL DISPLAY_2, #01111101b
+	ANL DISPLAY_2, #11111101b
+	RET
+D7_2:	ORL DISPLAY_2, #00000111b
+	ANL DISPLAY_2, #10000111b
+	RET
+D8_2:	ORL DISPLAY_2, #01111111b
+	ANL DISPLAY_2, #11111111b
+	RET
+D9_2:	ORL DISPLAY_2, #01101111b
+	ANL DISPLAY_2, #11101111b
+	RET
+
+ARRANCAR_T0:
+	MOV TH0, #0x7B
+	MOV TL0, #0x80
+	SETB TR0
+	RET
+;-----------------------------------------------------------------------------------
+;				INTERRUPCIONES
+;-----------------------------------------------------------------------------------
+ADC_ISR:
+	PUSH ACC
+	PUSH PSW
+	SETB TICK_ADC
+	ANL ADCON, #0xEF
+	POP PSW
+	POP ACC
+	RETI
+
+
+
+INT0_ISR:
+	PUSH ACC
+	PUSH PSW
+	POP PSW
+	POP ACC
+	RETI
+
+TIMER0_ISR:	
+	PUSH ACC
+	PUSH PSW
+	INC CONT1s
+	CJNE CONT1s, #0x1F, CONTINUAR
+	SETB TICK_1s
+	MOV CONT1s, #0x00
+	INC CONT15s
+	CJNE CONT15s, #0x0F, PRIMERA_VUELTA
+	SETB TICK_15s
+	MOV CONT15s, #0x00
+	INC CONT1m
+	CJNE CONT1m, #0x04, PRIMERA_VUELTA
+	SETB TICK_1m
+	DEC MINUTOS
+	MOV CONT1m, #0x00
+	INC CONT10m
+	CJNE CONT10m, #0x0A, PRIMERA_VUELTA
+	SETB TICK_10m
+	MOV CONT10m, #0x00
+	INC CONT50m
+	CJNE CONT50m, #0x05, PRIMERA_VUELTA
+	SETB TICK_50m
+	MOV CONT50m, #0x00
+	POP PSW
+	POP ACC
+	RETI
+
+PRIMERA_VUELTA:
+	MOV TH0, #0x7B
+	MOV TL0, #0x80
+	SETB TR0
+	AJMP FIN
+CONTINUAR:
+	MOV TH0, #0x00
+	MOV TL0, #0x00
+	SETB TR0
+	AJMP FIN
+
+FIN:
+	POP PSW
+	POP ACC	
+	RETI
+
+END
+
+
+
